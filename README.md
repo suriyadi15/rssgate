@@ -6,10 +6,12 @@ Credentials and a proxy travel with each request. The scraping logic is ported f
 ## Run
 
 ```bash
-docker build -t rssgate .
-docker run -d -p 3000:3000 -e ACCESS_KEY=change-me rssgate
+docker run -d -p 3000:3000 -e ACCESS_KEY=change-me ghcr.io/suriyadi15/rssgate:latest
+# or build it yourself: docker build -t rssgate .
 # or without Docker: bun install && ACCESS_KEY=change-me bun src/index.ts
 ```
+
+Image tags on `ghcr.io/suriyadi15/rssgate` (linux/amd64 and linux/arm64): `latest` is the head of `main`, `sha-<commit>` is one build, `X.Y.Z` and `X.Y` follow the git tags `vX.Y.Z`.
 
 | Env           | Default | Meaning                                                  |
 | ------------- | ------- | -------------------------------------------------------- |
@@ -109,3 +111,7 @@ scripts/check-upstream.sh   # RSSHub fixes to adopt (clones the official repo in
 Layout: `src/platforms/*` scrape one platform each, `src/routes/*` map URLs to them, `src/{context,cache,http,feed}.ts` are the shared parts.
 A GitHub Action (`.github/workflows/upstream.yml`) runs the same check every Monday and opens or updates an issue when RSSHub changed a ported file.
 Platforms change often; when a feed breaks, compare with the RSSHub files in `UPSTREAM.md` first.
+
+## License
+
+AGPL-3.0, see `LICENSE`. The scraping logic is derived from [RSSHub](https://github.com/DIYgod/RSSHub) (AGPL-3.0), see `UPSTREAM.md` for the mapping.
