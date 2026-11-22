@@ -3,6 +3,20 @@ import { HttpError, needsCredential, notFound } from './errors';
 
 const defaultUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36';
 
+// Several platforms (Threads, Instagram) only serve the full page to requests that look like a browser navigation
+const browserHeaders: Record<string, string> = {
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'sec-ch-ua': '"Not;A=Brand";v="99", "Google Chrome";v="139", "Chromium";v="139"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+    'upgrade-insecure-requests': '1',
+};
+
 export type FetchOptions = {
     method?: string;
     headers?: Record<string, string>;
@@ -18,7 +32,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Sends a request through the proxy of the running request (PROXY_URI), retrying network errors and 5xx. */
 export const request = async (url: string, options: FetchOptions = {}): Promise<Response> => {
-    const headers: Record<string, string> = { 'user-agent': defaultUa, 'accept-language': 'en-US,en;q=0.9', ...options.headers };
+    const headers: Record<string, string> = { 'user-agent': defaultUa, ...browserHeaders, ...options.headers };
     let body = options.body;
     if (options.json !== undefined) {
         body = JSON.stringify(options.json);
