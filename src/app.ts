@@ -46,7 +46,8 @@ export const createApp = (accessKey: string) => {
                 const limit = limitText ? Math.min(Math.max(Number.parseInt(limitText, 10) || 0, 1), maxLimit) : undefined;
                 const params = c.req.param() as Record<string, string>;
                 const noCache = c.req.header('cache-control')?.includes('no-cache');
-                const feed = await (noCache ? handler(params) : tryGet(`feed:${c.req.path}`, () => handler(params), feedTtl));
+                const query = c.req.query();
+                const feed = await (noCache ? handler(params, query) : tryGet(`feed:${c.req.path}?${new URLSearchParams(query)}`, () => handler(params, query), feedTtl));
                 c.header('Cache-Control', 'no-store');
                 return c.json(toJsonFeed(feed, limit));
             });
