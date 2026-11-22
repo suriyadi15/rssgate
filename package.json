@@ -1,0 +1,23 @@
+{
+    "name": "rssgate",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "start": "bun src/index.ts",
+        "dev": "bun --watch src/index.ts",
+        "test": "bun test",
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "cheerio": "^1.2.0",
+        "hono": "^4.13.20",
+        "tough-cookie": "^6.1.0",
+        "x-client-transaction-id": "^0.3.3",
+        "youtubei.js": "^18.3.0"
+    },
+    "devDependencies": {
+        "@types/bun": "^1.4.5",
+        "typescript": "^7.0.2"
+    }
+}
