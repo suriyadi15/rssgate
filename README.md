@@ -103,8 +103,9 @@ Catatan:
 bun install
 bun test
 bunx tsc --noEmit
-RSSHUB_DIR=/path/to/RSSHub scripts/check-upstream.sh   # RSSHub fixes to adopt
+scripts/check-upstream.sh   # RSSHub fixes to adopt (clones the official repo into ~/.cache/rssgate)
 ```
 
 Layout: `src/platforms/*` scrape one platform each, `src/routes/*` map URLs to them, `src/{context,cache,http,feed}.ts` are the shared parts.
+A GitHub Action (`.github/workflows/upstream.yml`) runs the same check every Monday and opens or updates an issue when RSSHub changed a ported file.
 Platforms change often; when a feed breaks, compare with the RSSHub files in `UPSTREAM.md` first.

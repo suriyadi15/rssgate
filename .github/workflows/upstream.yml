@@ -1,0 +1,48 @@
+name: Check RSSHub upstream
+
+on:
+    schedule:
+        - cron: '0 3 * * 1' # Mondays 03:00 UTC
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    issues: write
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: List new RSSHub commits for the ported files
+              id: check
+              run: |
+                  set +e
+                  scripts/check-upstream.sh --check | tee upstream.txt
+                  echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+            - name: Open or update the issue
+              if: steps.check.outputs.code == '10'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  title='RSSHub changed files rssgate was ported from'
+                  {
+                      echo 'Commits of the official RSSHub repo that touched the ported files since the commit recorded in `UPSTREAM.md`.'
+                      echo 'Adopt what matters in `src/platforms/*`, then move the commits in `UPSTREAM.md` forward.'
+                      echo
+                      echo '```'
+                      cat upstream.txt
+                      echo '```'
+                  } > body.md
+                  number=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+                  if [ -n "$number" ]; then
+                      gh issue edit "$number" --body-file body.md
+                  else
+                      gh issue create --title "$title" --body-file body.md
+                  fi
+
+            - name: Fail on an unexpected error
+              if: steps.check.outputs.code != '0' && steps.check.outputs.code != '10'
+              run: exit 1
