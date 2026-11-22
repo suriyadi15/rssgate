@@ -112,6 +112,16 @@ Layout: `src/platforms/*` scrape one platform each, `src/routes/*` map URLs to t
 A GitHub Action (`.github/workflows/upstream.yml`) runs the same check every Monday and opens or updates an issue when RSSHub changed a ported file.
 Platforms change often; when a feed breaks, compare with the RSSHub files in `UPSTREAM.md` first.
 
+## Releasing
+
+```bash
+bun pm version patch      # or minor / major: updates package.json, commits and tags vX.Y.Z
+git push --follow-tags    # the Docker workflow then publishes X.Y.Z and X.Y
+gh release create vX.Y.Z --generate-notes
+```
+
+While the version is 0.x, minor bumps may change routes or response shapes.
+
 ## License
 
 AGPL-3.0, see `LICENSE`. The scraping logic is derived from [RSSHub](https://github.com/DIYgod/RSSHub) (AGPL-3.0), see `UPSTREAM.md` for the mapping.
