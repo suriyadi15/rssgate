@@ -51,6 +51,52 @@ curl -H 'Authorization: Bearer change-me' \
 
 Errors are `{"error":{"message":"..."}}`: 400 bad parameter or header, 401 wrong key, 404 not found, 429 platform rate limit, 502 platform failure, 503 credential missing/expired/blocked.
 
+## Contoh nilai env dan kredensial
+
+Semua nilai di bawah palsu.
+
+```bash
+# Env proses
+ACCESS_KEY=ganti-dengan-string-acak-panjang   # wajib
+PORT=3000
+CACHE_TTL=300        # detik, cache feed utuh
+CONTENT_TTL=3600     # detik, cache detail (id user, token, dll)
+```
+
+| Key                  | Contoh nilai                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `TWITTER_AUTH_TOKEN` | `0a1b2c3d4e5f60718293a4b5c6d7e8f901234567` (hanya nilai cookie `auth_token` dari x.com)                       |
+| `INSTAGRAM_COOKIE`   | `sessionid=12345678%3AAbCdEf%3A5; csrftoken=AbCdEfGh123; ds_user_id=12345678`                                |
+| `FACEBOOK_COOKIE`    | `c_user=100012345678901; xs=12%3AAbCdEf%3A2%3A1712345678%3A-1%3A-1; datr=AbCdEfGhIjKl`                        |
+| `PROXY_URI`          | `socks5h://user:pass@127.0.0.1:1080` atau `http://user:pass@proxy.example.com:8080`                           |
+
+Contoh request per kredensial:
+
+```bash
+# Twitter + proxy
+curl -H 'Authorization: Bearer ganti-dengan-string-acak-panjang' \
+     -H 'X-Rssgate-Config: {"TWITTER_AUTH_TOKEN":"0a1b2c3d4e5f60718293a4b5c6d7e8f901234567","PROXY_URI":"socks5h://user:pass@127.0.0.1:1080"}' \
+     'http://localhost:3000/twitter/user/jack?limit=10'
+
+# Instagram akun privat
+curl -H 'Authorization: Bearer ganti-dengan-string-acak-panjang' \
+     -H 'X-Rssgate-Config: {"INSTAGRAM_COOKIE":"sessionid=12345678%3AAbCdEf%3A5; csrftoken=AbCdEfGh123"}' \
+     'http://localhost:3000/instagram/user/someprivateuser'
+
+# Facebook
+curl -H 'Authorization: Bearer ganti-dengan-string-acak-panjang' \
+     -H 'X-Rssgate-Config: {"FACEBOOK_COOKIE":"c_user=100012345678901; xs=12%3AAbCdEf%3A2%3A1712345678%3A-1%3A-1; datr=AbCdEfGhIjKl"}' \
+     'http://localhost:3000/facebook/page/Meta'
+```
+
+Catatan:
+
+- `PROXY_URI` menerima protokol `http`, `https`, `socks5` dan `socks5h`.
+- Cookie Instagram dan Facebook dikirim persis seperti header `Cookie` di browser: pasangan `nama=nilai` dipisah `; `. Paling mudah disalin dari tab Network di DevTools.
+- Instagram butuh `sessionid` (dan `csrftoken` bila ada). Facebook butuh `c_user` dan `xs`.
+- Di JSON, tanda kutip di dalam nilai harus di-escape. `%3A` dibiarkan apa adanya.
+- Threads, TikTok dan YouTube tidak butuh kredensial, hanya `PROXY_URI` yang berlaku.
+
 ## Develop
 
 ```bash
