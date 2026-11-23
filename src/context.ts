@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { badRequest } from './errors';
 
 /** Credentials and proxy a request may bring itself, in the X-Rssgate-Config header. */
-export const allowedNames = ['TWITTER_AUTH_TOKEN', 'INSTAGRAM_COOKIE', 'FACEBOOK_COOKIE', 'PROXY_URI'] as const;
+export const allowedNames = ['TWITTER_AUTH_TOKEN', 'TWITTER_CONSUMER_KEY', 'TWITTER_CONSUMER_SECRET', 'INSTAGRAM_COOKIE', 'FACEBOOK_COOKIE', 'YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REFRESH_TOKEN', 'PROXY_URI'] as const;
 type Name = (typeof allowedNames)[number];
 
 type Store = { env: Partial<Record<Name, string>>; scope: string };

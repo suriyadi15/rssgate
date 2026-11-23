@@ -3,7 +3,7 @@ import { ClientTransaction, fetchXDocument } from 'x-client-transaction-id';
 
 import { tryGet } from '../cache';
 import { getEnv } from '../context';
-import { HttpError, needsCredential, notFound } from '../errors';
+import { badRequest, HttpError, needsCredential, notFound } from '../errors';
 import type { Feed, Item } from '../feed';
 import { request } from '../http';
 
@@ -22,6 +22,9 @@ const fallbackIds: Record<string, string> = {
     SearchTimeline: 'BGd0T_j7oVwlW5U79tO_0A',
     ListLatestTweetsTimeline: 'jW040BLUjh8X6Tw2ODQufA',
     TweetDetail: '559hs_YZNV4IgA3Z6zIIuw',
+    // Likes is not in RSSHub's list; this id is the last one seen and is replaced by the live one
+    Likes: 'eSSNbhECHHWWALkkQq-YTA',
+    AudioSpaceById: 'ipEqgz4P_bZCGY3fBnfsxQ',
 };
 
 const gqlFeatureUser = {
@@ -89,6 +92,34 @@ const TweetDetailFeatures = {
     longform_notetweets_inline_media_enabled: true,
     responsive_web_enhance_cards_enabled: false,
 };
+const audioSpaceFeatures = {
+    ...gqlFeatureFeed,
+    spaces_2022_h2_spaces_communities: true,
+    spaces_2022_h2_clipping: true,
+    profile_label_improvements_pcf_label_in_post_enabled: true,
+    responsive_web_profile_redirect_enabled: true,
+    rweb_tipjar_consumption_enabled: false,
+    premium_content_api_read_enabled: false,
+    responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+    responsive_web_grok_analyze_post_followups_enabled: true,
+    rweb_cashtags_composer_attachment_enabled: true,
+    responsive_web_jetfuel_frame: true,
+    rweb_sports_post_context_enabled: true,
+    responsive_web_grok_share_attachment_enabled: true,
+    responsive_web_grok_annotations_enabled: true,
+    rweb_conversational_replies_downvote_enabled: false,
+    content_disclosure_indicator_enabled: true,
+    content_disclosure_ai_generated_indicator_enabled: true,
+    responsive_web_grok_show_grok_translated_post: true,
+    responsive_web_grok_analysis_button_from_backend: true,
+    post_ctas_fetch_enabled: false,
+    rweb_cashtags_enabled: true,
+    longform_notetweets_inline_media_enabled: false,
+    responsive_web_nested_quote_preview_enabled: true,
+    responsive_web_grok_image_annotation_enabled: true,
+    responsive_web_grok_imagine_annotation_enabled: true,
+    responsive_web_grok_community_note_auto_translation_is_enabled: true,
+};
 const gqlFeatures: Record<string, Record<string, boolean | string | number>> = {
     UserByScreenName: gqlFeatureUser,
     UserByRestId: gqlFeatureUser,
@@ -101,6 +132,7 @@ const gqlFeatures: Record<string, Record<string, boolean | string | number>> = {
     HomeLatestTimeline: TweetDetailFeatures,
     TweetDetail: TweetDetailFeatures,
     Likes: gqlFeatureFeed,
+    AudioSpaceById: audioSpaceFeatures,
 };
 
 
@@ -158,20 +190,14 @@ const getCookies = (token: string) =>
 
 type Params = Record<string, string | number | boolean | undefined>;
 
-const twitterGet = async (operation: string, variables: Params, refreshTransactionId = false): Promise<any> => {
+const twitterFetch = async (url: string, transactionPath: string | undefined, retryWithFreshId: () => Promise<any>, refreshTransactionId: boolean): Promise<any> => {
     const token = getEnv('TWITTER_AUTH_TOKEN');
     if (!token) {
         throw needsCredential('Twitter needs TWITTER_AUTH_TOKEN (the auth_token cookie of a logged-in account).');
     }
-    const ids = await getQueryIds();
-    const path = `/graphql/${ids[operation]}/${operation}`;
-    const query = new URLSearchParams({ variables: JSON.stringify(variables), features: JSON.stringify(gqlFeatures[operation]) });
-    if (operation.startsWith('UserBy')) {
-        query.set('fieldToggles', JSON.stringify({ withAuxiliaryUserLabels: false }));
-    }
     const cookies = await getCookies(token);
-    const transactionId = /^(UserTweetsAndReplies|SearchTimeline)$/.test(operation) ? await getTransactionId('GET', `/i/api${path}`, refreshTransactionId) : undefined;
-    const response = await request(`${baseUrl}${path}?${query}`, {
+    const transactionId = transactionPath ? await getTransactionId('GET', transactionPath, refreshTransactionId) : undefined;
+    const response = await request(url, {
         headers: {
             accept: '*/*',
             authorization: bearerToken,
@@ -192,7 +218,7 @@ const twitterGet = async (operation: string, variables: Params, refreshTransacti
         },
     });
     if (response.status === 404 && transactionId && !refreshTransactionId) {
-        return twitterGet(operation, variables, true);
+        return retryWithFreshId();
     }
     if (response.status === 401 || response.status === 403) {
         throw needsCredential('Twitter refused TWITTER_AUTH_TOKEN, it is expired, locked or blocked.');
@@ -205,6 +231,22 @@ const twitterGet = async (operation: string, variables: Params, refreshTransacti
     }
     return response.json();
 };
+
+const twitterGet = async (operation: string, variables: Params, refreshTransactionId = false): Promise<any> => {
+    if (!getEnv('TWITTER_AUTH_TOKEN')) {
+        throw needsCredential('Twitter needs TWITTER_AUTH_TOKEN (the auth_token cookie of a logged-in account).');
+    }
+    const ids = await getQueryIds();
+    const path = `/graphql/${ids[operation]}/${operation}`;
+    const query = new URLSearchParams({ variables: JSON.stringify(variables), features: JSON.stringify(gqlFeatures[operation]) });
+    if (operation.startsWith('UserBy')) {
+        query.set('fieldToggles', JSON.stringify({ withAuxiliaryUserLabels: false }));
+    }
+    const needsTransactionId = /^(UserTweetsAndReplies|SearchTimeline)$/.test(operation);
+    return twitterFetch(`${baseUrl}${path}?${query}`, needsTransactionId ? `/i/api${path}` : undefined, () => twitterGet(operation, variables, true), refreshTransactionId);
+};
+
+const twitterRest = (path: string, params: Record<string, string>) => twitterFetch(`${baseUrl}${path}?${new URLSearchParams(params)}`, undefined, async () => undefined, false);
 
 const timelineEntries = async (operation: string, userId: string | undefined, variables: Params, path?: string[]) => {
     const { data } = await twitterGet(operation, { ...variables, userId });
@@ -523,5 +565,115 @@ export const getTweetFeed = async (id: string, status: string): Promise<Feed> =>
         description: profile.description,
         icon: profile.image,
         items: gatherLegacyFromData(entries, ['homeConversation-', 'conversationthread-']).map((t) => toItem(t)),
+    };
+};
+
+const mediaTimeline = async (operation: 'UserMedia' | 'Likes', id: string, variables: Params, options: Options) => {
+    const user = await getUserData(id.replace(/^@/, ''));
+    const entries = await timelineEntries(operation, user.rest_id, { count: 20, includePromotedContent: false, withVoice: true, withV2Timeline: true, ...variables });
+    // Likes belong to other authors, so they are not filtered by the user id
+    const tweets = gatherLegacyFromData(entries, ['profile-conversation-'], operation === 'UserMedia' ? user.rest_id : undefined);
+    return { profile: profileOf(user), tweets: filterTweets(tweets, options) };
+};
+
+export const getMediaFeed = async (id: string, options: Options = {}): Promise<Feed> => {
+    const { profile, tweets } = await mediaTimeline('UserMedia', id, { withClientEventToken: false, withBirdwatchNotes: false }, options);
+    return {
+        title: `Twitter @${profile.name}`,
+        url: `https://x.com/${profile.screenName}/media`,
+        description: profile.description,
+        icon: profile.image,
+        items: tweets.map((t) => toItem(t)),
+    };
+};
+
+export const getLikesFeed = async (id: string, options: Options = {}): Promise<Feed> => {
+    const name = id.replace(/^@/, '');
+    const { tweets } = await mediaTimeline('Likes', name, { includeHasBirdwatchNotes: false, withBirdwatchNotes: false, withVoice: false }, options);
+    return { title: `Twitter Likes - ${name}`, url: `https://x.com/${name}/likes`, items: tweets.map((t) => toItem(t)) };
+};
+
+export const getHomeLatestFeed = async (options: Options = {}): Promise<Feed> => {
+    const entries = await timelineEntries('HomeLatestTimeline', undefined, { count: 20, includePromotedContent: true, latestControlAvailable: true, requestContext: 'launch', withCommunity: true }, ['home', 'home_timeline_urt']);
+    return { title: 'Twitter following timeline', url: 'https://x.com/home', items: filterTweets(gatherLegacyFromData(entries), options).map((t) => toItem(t)) };
+};
+
+/** Trends need a developer app (TWITTER_CONSUMER_KEY and TWITTER_CONSUMER_SECRET), not the web session. */
+export const getTrendsFeed = async (woeid = '1'): Promise<Feed> => {
+    const key = getEnv('TWITTER_CONSUMER_KEY');
+    const secret = getEnv('TWITTER_CONSUMER_SECRET');
+    if (!key || !secret) {
+        throw needsCredential('Twitter trends need TWITTER_CONSUMER_KEY and TWITTER_CONSUMER_SECRET (a developer app).');
+    }
+    if (!/^\d+$/.test(woeid)) {
+        throw badRequest('woeid must be a number such as 1 (world) or 23424856 (Japan).');
+    }
+    const bearer = await tryGet(
+        `twitter:app-token:${key.slice(-6)}`,
+        async () => {
+            const response = await request('https://api.twitter.com/oauth2/token', {
+                method: 'POST',
+                headers: { authorization: `Basic ${Buffer.from(`${encodeURIComponent(key)}:${encodeURIComponent(secret)}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                body: 'grant_type=client_credentials',
+            });
+            const body: any = await response.json().catch(() => ({}));
+            if (!response.ok || !body.access_token) {
+                throw needsCredential('Twitter refused TWITTER_CONSUMER_KEY / TWITTER_CONSUMER_SECRET.');
+            }
+            return body.access_token as string;
+        },
+        3600
+    );
+    const response = await request(`https://api.twitter.com/1.1/trends/place.json?id=${woeid}`, { headers: { authorization: `Bearer ${bearer}` } });
+    if (response.status === 429) {
+        throw new HttpError(429, 'Twitter rate limit reached, try again later.');
+    }
+    if (!response.ok) {
+        throw new HttpError(502, `Twitter answered ${response.status}.`);
+    }
+    const [data]: any[] = await response.json();
+    return {
+        title: `Twitter Trends on ${data?.locations?.[0]?.name ?? woeid}`,
+        url: 'https://x.com/i/trends',
+        items: (data?.trends ?? [])
+            .filter((t: any) => !t.promoted_content)
+            .map((t: any) => ({ url: t.url, title: t.name, contentHtml: t.name + (t.tweet_volume ? ` (${t.tweet_volume})` : '') })),
+    };
+};
+
+/** Whether a user is hosting or speaking in a live Space right now. */
+export const getSpacesFeed = async (username: string): Promise<Feed> => {
+    const name = username.replace(/^@/, '');
+    if (!/^\w{1,15}$/.test(name)) {
+        throw badRequest('Use a valid X username without @.');
+    }
+    const user = await getUserData(name);
+    const profile = profileOf(user);
+    const link = `https://x.com/${profile.screenName ?? name}`;
+    const idle = (speaking: boolean): Feed => ({
+        title: `${profile.screenName ?? name} - Space speaking status`,
+        url: link,
+        items: [{ url: `${link}#spaces-inactive`, title: `${profile.name} is not ${speaking ? 'speaking ' : ''}in a live Space`, contentHtml: '', author: profile.name }],
+    });
+    const presence = await twitterRest('/fleets/v1/avatar_content', { user_ids: user.rest_id });
+    const current = presence?.users?.[user.rest_id]?.spaces?.live_content?.audiospace?.id;
+    if (!current) {
+        return idle(false);
+    }
+    const response = await twitterGet('AudioSpaceById', { id: current, isMetatagsQuery: false, withReplays: true, withListeners: false });
+    const space = response?.data?.audioSpace;
+    if (!space) {
+        throw new HttpError(502, 'Twitter returned no metadata for the current Space.');
+    }
+    const hosting = space.participants?.admins?.some((p: any) => p.user_results?.rest_id === user.rest_id);
+    const speaking = space.participants?.speakers?.some((p: any) => p.user_results?.rest_id === user.rest_id);
+    if (space.metadata?.state !== 'Running' || (!hosting && !speaking)) {
+        return idle(true);
+    }
+    const url = `https://x.com/i/spaces/${space.metadata.rest_id}`;
+    return {
+        title: `${profile.screenName ?? name} - Space speaking status`,
+        url: link,
+        items: [{ url, title: `${profile.name} is ${hosting ? 'hosting' : 'speaking in'} ${space.metadata.title || 'a live Space'}`, contentHtml: '', author: profile.name, published: new Date(space.metadata.started_at), tags: [hosting ? 'host' : 'speaker'] }],
     };
 };

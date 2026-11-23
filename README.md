@@ -20,7 +20,7 @@ Image tags on `ghcr.io/suriyadi15/rssgate` (linux/amd64 and linux/arm64): `lates
 | `CACHE_TTL`   | 300     | Seconds a finished feed is kept                          |
 | `CONTENT_TTL` | 3600    | Seconds details (user ids, tokens, ...) are kept         |
 
-`TWITTER_AUTH_TOKEN`, `INSTAGRAM_COOKIE`, `FACEBOOK_COOKIE` and `PROXY_URI` may also be set as process env, they are the defaults for requests that bring none.
+The credential keys below and `PROXY_URI` may also be set as process env, they are the defaults for requests that bring none.
 
 ## Request
 
@@ -31,29 +31,121 @@ curl -H 'Authorization: Bearer change-me' \
 ```
 
 - `Authorization: Bearer <ACCESS_KEY>` (or `?key=`) is required, except for `/healthz`.
-- `X-Rssgate-Config` is a JSON object, only `TWITTER_AUTH_TOKEN`, `INSTAGRAM_COOKIE`, `FACEBOOK_COOKIE` and `PROXY_URI` (`http`, `https`, `socks5`, `socks5h`) are accepted. Values are never logged or echoed.
+- `X-Rssgate-Config` is a JSON object, only the credential keys of the table [below](#credentials-and-example-values) and `PROXY_URI` (`http`, `https`, `socks5`, `socks5h`) are accepted. Values are never logged or echoed.
 - `limit=N` (1..100) trims the items. `Cache-Control: no-cache` skips the feed cache.
 - Cache entries are keyed by the credentials of the request: data fetched with one account is never served to another account or to a request without credentials.
 
-| Route                                | Credential                                         | Query                                         |
-| ------------------------------------ | -------------------------------------------------- | --------------------------------------------- |
-| `/twitter/user/:id`                  | `TWITTER_AUTH_TOKEN`                               | `includeReplies`, `includeRts`, `onlyMedia`   |
-| `/twitter/home`                      | `TWITTER_AUTH_TOKEN`                               | `includeRts`, `onlyMedia`                     |
-| `/twitter/list/:id`                  | `TWITTER_AUTH_TOKEN`                               |                                               |
-| `/twitter/keyword/:keyword`          | `TWITTER_AUTH_TOKEN`                               |                                               |
-| `/twitter/tweet/:id/status/:status`  | `TWITTER_AUTH_TOKEN`                               |                                               |
-| `/instagram/user/:user`              | optional `INSTAGRAM_COOKIE` (needed for private)   |                                               |
-| `/threads/:user`                     | none                                               |                                               |
-| `/facebook/page/:id`                 | optional `FACEBOOK_COOKIE`                         |                                               |
-| `/tiktok/user/:user`                 | none                                               |                                               |
-| `/youtube/channel/:id`               | none                                               |                                               |
-| `/youtube/user/:handle`              | none                                               |                                               |
-| `/youtube/playlist/:id`              | none                                               |                                               |
-| `/youtube/community/:handle`         | none                                               |                                               |
+## Routes
+
+Every route answers JSON Feed 1.1. `limit`, `Cache-Control: no-cache` and the credentials work the same on all of them. The query options of a route are listed in its table, for the rest of RSSHub's `:routeParams` (display tweaks such as `showAuthorInTitle`) there is no equivalent.
+
+Platforms: [X / Twitter](#x--twitter) · [Instagram](#instagram) · [Threads](#threads) · [Facebook](#facebook) · [TikTok](#tiktok) · [YouTube](#youtube)
+
+### X / Twitter
+
+Query options of the timeline routes: `includeReplies` (user only, default false), `includeRts` (default true), `onlyMedia` (default false).
+
+| Route                               | Credential                                       | Query                                       | Returns                                        |
+| ----------------------------------- | ------------------------------------------------ | ------------------------------------------- | ---------------------------------------------- |
+| `/twitter/user/:id`                 | `TWITTER_AUTH_TOKEN`                             | `includeReplies`, `includeRts`, `onlyMedia` | Tweets of a user, `:id` is a username or `+<numeric id>` |
+| `/twitter/media/:id`                | `TWITTER_AUTH_TOKEN`                             | `includeRts`, `onlyMedia`                   | Media tab of a user                            |
+| `/twitter/likes/:id`                | `TWITTER_AUTH_TOKEN`                             | `includeRts`, `onlyMedia`                   | Tweets a user liked                            |
+| `/twitter/home`                     | `TWITTER_AUTH_TOKEN`                             | `includeRts`, `onlyMedia`                   | "For you" timeline of the account              |
+| `/twitter/home_latest`              | `TWITTER_AUTH_TOKEN`                             | `includeRts`, `onlyMedia`                   | "Following" timeline of the account            |
+| `/twitter/list/:id`                 | `TWITTER_AUTH_TOKEN`                             | `includeRts`, `onlyMedia`                   | Tweets of a list                               |
+| `/twitter/keyword/:keyword`         | `TWITTER_AUTH_TOKEN`                             | `includeRts`, `onlyMedia`                   | Search results (latest)                        |
+| `/twitter/tweet/:id/status/:status` | `TWITTER_AUTH_TOKEN`                             |                                             | A tweet and its thread                         |
+| `/twitter/spaces/:username`         | `TWITTER_AUTH_TOKEN`                             |                                             | Whether the user hosts or speaks in a live Space |
+| `/twitter/trends/:woeid?`           | `TWITTER_CONSUMER_KEY` + `TWITTER_CONSUMER_SECRET` |                                           | Trends of a place, `woeid` defaults to 1 (world); needs a developer app, not the web session |
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-string' \
+     -H 'X-Rssgate-Config: {"TWITTER_AUTH_TOKEN":"0a1b2c3d4e5f60718293a4b5c6d7e8f901234567"}' \
+     'http://localhost:3000/twitter/media/jack?limit=10'
+```
+
+### Instagram
+
+| Route                          | Credential                                          | Returns                                   |
+| ------------------------------ | --------------------------------------------------- | ----------------------------------------- |
+| `/instagram/user/:user`        | optional `INSTAGRAM_COOKIE` (needed for private)    | Posts of a user                           |
+| `/instagram/stories/:user`     | `INSTAGRAM_COOKIE`                                  | Current stories of a user                 |
+| `/instagram/highlights/:user`  | `INSTAGRAM_COOKIE`                                  | Highlighted stories of a user             |
+| `/instagram/tags/:tag`         | `INSTAGRAM_COOKIE`                                  | Top posts of a hashtag, without the `#`   |
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-string' \
+     -H 'X-Rssgate-Config: {"INSTAGRAM_COOKIE":"sessionid=12345678%3AAbCdEf%3A5; csrftoken=AbCdEfGh123"}' \
+     'http://localhost:3000/instagram/stories/someuser'
+```
+
+### Threads
+
+No credential. Query options: `replies` (user, default false), `serpType` (search, `tags` / `default` / `recent`, default `tags`).
+
+| Route                         | Query       | Returns                          |
+| ----------------------------- | ----------- | -------------------------------- |
+| `/threads/:user`              | `replies`   | Threads of a user                |
+| `/threads/:user/post/:id`     |             | A post and its replies           |
+| `/threads/search/:keyword`    | `serpType`  | Search results                   |
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-string' 'http://localhost:3000/threads/zuck?limit=10'
+```
+
+### Facebook
+
+| Route                  | Credential                                                        | Returns                              |
+| ---------------------- | ----------------------------------------------------------------- | ------------------------------------ |
+| `/facebook/page/:id`   | optional `FACEBOOK_COOKIE`                                        | Posts of a page                      |
+| `/facebook/group/:id`  | optional `FACEBOOK_COOKIE` (public groups; most need it)         | Posts of a group, `:id` is a number or a group name |
+| `/facebook/photos/:id` | optional `FACEBOOK_COOKIE`                                        | Photos of a page or profile          |
+| `/facebook/reels/:id`  | optional `FACEBOOK_COOKIE`                                        | Reels of a page or profile           |
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-string' \
+     -H 'X-Rssgate-Config: {"FACEBOOK_COOKIE":"c_user=100012345678901; xs=12%3AAbCdEf%3A2%3A1712345678%3A-1%3A-1"}' \
+     'http://localhost:3000/facebook/group/613870175328566'
+```
+
+### TikTok
+
+No credential.
+
+| Route                 | Returns                                                                  |
+| --------------------- | ------------------------------------------------------------------------ |
+| `/tiktok/user/:user`  | Videos of a user                                                         |
+| `/tiktok/live/:user`  | Whether the user is live; the status is part of the item id, so a change shows up as a new item |
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-string' 'http://localhost:3000/tiktok/live/@tiktok'
+```
+
+### YouTube
+
+Only subscriptions needs credentials. `:username` is a handle (`@NASA`) or a channel id (`UC...`).
+
+| Route                                      | Credential                                                              | Returns                                                        |
+| ------------------------------------------ | ----------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `/youtube/channel/:id`                     | none                                                                    | Videos of a channel id                                         |
+| `/youtube/user/:handle`                    | none                                                                    | Videos of a handle                                             |
+| `/youtube/c/:username`                     | none                                                                    | Videos of a custom URL (`youtube.com/c/name`)                  |
+| `/youtube/playlist/:id`                    | none                                                                    | Videos of a playlist                                           |
+| `/youtube/community/:handle`               | none                                                                    | Community posts                                                |
+| `/youtube/live/:username`                  | none                                                                    | Live, upcoming and past streams; the state is the item `tags`  |
+| `/youtube/shows/:username`                 | none                                                                    | Shows of a channel                                             |
+| `/youtube/charts/:category?/:country?`     | none                                                                    | YouTube Music charts. `category`: `TopVideos` (default), `TopSongs`, `TopArtists`, `TrendingVideos`; `country` a code such as `us`, default global. `?country=` also works for the default category |
+| `/youtube/subscriptions`                   | `YOUTUBE_CLIENT_ID` + `YOUTUBE_CLIENT_SECRET` + `YOUTUBE_REFRESH_TOKEN` | Latest uploads of the channels an account subscribes to        |
+
+`/youtube/charts` depends on a web key of the charts site that RSSHub ships and Google may revoke; it answers 502 while that is the case.
+
+```bash
+curl -H 'Authorization: Bearer replace-with-a-long-random-string' 'http://localhost:3000/youtube/live/@NASA'
+```
 
 Errors are `{"error":{"message":"..."}}`: 400 bad parameter or header, 401 wrong key, 404 not found, 429 platform rate limit, 502 platform failure, 503 credential missing/expired/blocked.
 
-## Example values for env and credentials
+## Credentials and example values
 
 All values below are fake.
 
@@ -70,6 +162,8 @@ CONTENT_TTL=3600     # seconds details (user ids, tokens, ...) are cached
 | `TWITTER_AUTH_TOKEN` | `0a1b2c3d4e5f60718293a4b5c6d7e8f901234567` (only the value of the `auth_token` cookie from x.com)    |
 | `INSTAGRAM_COOKIE`   | `sessionid=12345678%3AAbCdEf%3A5; csrftoken=AbCdEfGh123; ds_user_id=12345678`                       |
 | `FACEBOOK_COOKIE`    | `c_user=100012345678901; xs=12%3AAbCdEf%3A2%3A1712345678%3A-1%3A-1; datr=AbCdEfGhIjKl`               |
+| `TWITTER_CONSUMER_KEY` / `TWITTER_CONSUMER_SECRET` | API key and secret of a developer app (`/twitter/trends` only)                                      |
+| `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` | OAuth client of a Google Cloud project with the YouTube Data API enabled, and a refresh token of the account for the scope `https://www.googleapis.com/auth/youtube.readonly` (`/youtube/subscriptions` only) |
 | `PROXY_URI`          | `socks5h://user:pass@127.0.0.1:1080` or `http://user:pass@proxy.example.com:8080`                   |
 
 Example request per credential:
@@ -97,7 +191,7 @@ Notes:
 - Instagram and Facebook cookies are sent exactly like the browser `Cookie` header: `name=value` pairs separated by `; `. The easiest way to get them is to copy the header from the Network tab of DevTools.
 - Instagram needs `sessionid` (and `csrftoken` when present). Facebook needs `c_user` and `xs`.
 - Inside JSON, quotes within a value must be escaped. Leave `%3A` as it is.
-- Threads, TikTok and YouTube need no credentials, only `PROXY_URI` applies to them.
+- Threads, TikTok and YouTube (except subscriptions) need no credentials, only `PROXY_URI` applies to them.
 
 ## Develop
 

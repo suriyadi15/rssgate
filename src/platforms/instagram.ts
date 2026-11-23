@@ -17,6 +17,8 @@ const docIds = {
     PolarisLoggedOutDesktopWWWProfilePostsTabContentQuery_connection: '28904005159232689',
     PolarisProfilePageContentQuery: '28036671149327607',
     PolarisProfilePostsQuery: '28570182382647478',
+    PolarisProfileStoryHighlightsTrayContentQuery: '26970053832668570',
+    PolarisStoriesV3ReelPageStandaloneQuery: '29184890191114309',
 };
 
 type Tokens = { lsd?: string; dtsg?: string };
@@ -151,7 +153,7 @@ const renderItem = (node: any): Item => {
         default:
             throw new HttpError(502, `Instagram: unhandled post type ${node.product_type}`);
     }
-    const music = node.clips_metadata?.music_info?.music_asset_info;
+    const music = node.story_music_stickers?.[0]?.music_asset_info ?? node.clips_metadata?.music_info?.music_asset_info;
     if (music?.title || music?.display_artist) {
         html += `<p>🎵 ${escapeHtml([music.title, music.display_artist].filter(Boolean).join(' - '))}</p>`;
     }
@@ -160,24 +162,43 @@ const renderItem = (node: any): Item => {
     }
     const timestamp = node.caption?.created_at_utc || node.taken_at;
     return {
-        url: `${baseUrl}/p/${node.code}/`,
-        title: summary.split('\n', 1)[0] || node.accessibility_caption || `Post by @${node.user?.username}`,
+        url: node.product_type === 'story' ? `${baseUrl}/stories/${node.user?.username}/${node.pk}/` : `${baseUrl}/p/${node.code}/`,
+        title: summary.split('\n', 1)[0] || node.accessibility_caption || `${node.product_type === 'story' ? 'Story from' : 'Post by'} @${node.user?.username}`,
         contentHtml: html,
         author: node.user?.username,
         published: timestamp ? parseDate(timestamp) : undefined,
     };
 };
 
-export const getUserFeed = async (username: string): Promise<Feed> => {
-    const cookie = getEnv('INSTAGRAM_COOKIE');
+const cookieJarOf = async (cookie: string | undefined) => {
     const jar = new CookieJar();
     if (cookie) {
         await Promise.all(cookie.split(/;\s*/).map((c) => jar.setCookie(c, baseUrl)));
     }
+    return jar;
+};
 
+const refusedCookie = (cookie: string | undefined) => needsCredential(cookie ? 'Instagram refused the cookie, INSTAGRAM_COOKIE is expired or blocked.' : 'Instagram asked for a login, send INSTAGRAM_COOKIE.');
+
+const tokensOf = (html: string): Tokens => ({
+    lsd: html.match(/"LSD",\[\],\{"token":"([^"]+)"/)?.[1],
+    dtsg: html.match(/"DTSGInitialData",\[\],\{"token":"([^"]+)"/)?.[1],
+});
+
+const requireCookie = (what: string) => {
+    const cookie = getEnv('INSTAGRAM_COOKIE');
+    if (!cookie) {
+        throw needsCredential(`Instagram ${what} need INSTAGRAM_COOKIE.`);
+    }
+    return cookie;
+};
+
+/** Opens the profile page of a user: the session (cookie jar, tokens) every other call needs. */
+const openProfile = async (username: string, cookie: string | undefined) => {
+    const jar = await cookieJarOf(cookie);
     const page = await loadPage(`${baseUrl}/${encodeURIComponent(username)}/`, jar);
     if (page.url.includes('/accounts/login/')) {
-        throw needsCredential(cookie ? 'Instagram refused the cookie, INSTAGRAM_COOKIE is expired or blocked.' : 'Instagram asked for a login, send INSTAGRAM_COOKIE.');
+        throw refusedCookie(cookie);
     }
     if (page.url.includes('/accounts/suspended/')) {
         throw needsCredential('The Instagram account of the cookie is suspended.');
@@ -187,32 +208,112 @@ export const getUserFeed = async (username: string): Promise<Feed> => {
     if (!profileId) {
         throw notFound(`Instagram user @${username} not found.`);
     }
-    const tokens: Tokens = {
-        lsd: html.match(/"LSD",\[\],\{"token":"([^"]+)"/)?.[1],
-        dtsg: html.match(/"DTSGInitialData",\[\],\{"token":"([^"]+)"/)?.[1],
-    };
     if (cookie && !(await checkLogin(jar))) {
-        throw needsCredential('Instagram refused the cookie, INSTAGRAM_COOKIE is expired or blocked.');
+        throw refusedCookie(cookie);
     }
+    return { jar, html, profileId, tokens: tokensOf(html) };
+};
+
+const profileQuery = (session: Awaited<ReturnType<typeof openProfile>>) =>
+    graphql(
+        'PolarisProfilePageContentQuery',
+        {
+            id: session.profileId,
+            enable_integrity_filters: true,
+            render_surface: 'PROFILE',
+            __relay_internal__pv__PolarisCannesGuardianExperienceEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisCASB976ProfileEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisWebSchoolsEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisRepostsConsumptionEnabledrelayprovider: false,
+            __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
+        },
+        session.tokens,
+        session.jar
+    );
+
+/** The profile of a user the cookie may look at, for stories and highlights. */
+const visibleUser = async (username: string) => {
+    const cookie = requireCookie('stories and highlights');
+    const session = await openProfile(username, cookie);
+    if (!session.tokens.dtsg) {
+        throw new HttpError(502, 'Instagram page has an unexpected shape.');
+    }
+    const user: User = (await profileQuery(session)).user;
+    if (user.is_private && !user.friendship_status?.following) {
+        throw needsCredential(`@${user.username} is private, send INSTAGRAM_COOKIE of an account that follows it.`);
+    }
+    return { session, user };
+};
+
+const reelsMedia = async (reelIds: string[], isHighlight: boolean, session: Awaited<ReturnType<typeof openProfile>>) => {
+    const data = await graphql(
+        'PolarisStoriesV3ReelPageStandaloneQuery',
+        { reel_ids_arr: reelIds, is_highlight: isHighlight, media_id: null, __relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider: false },
+        session.tokens,
+        session.jar
+    );
+    return data.xdt_api__v1__feed__reels_media.reels_media.map((reel: any) => ({ ...reel, items: reel.items.map((item: any) => ({ ...item, user: reel.user })) }));
+};
+
+const userHeader = (user: User) => ({ description: user.biography, icon: user.hd_profile_pic_url_info?.url ?? user.profile_pic_url });
+
+export const getStoriesFeed = async (username: string): Promise<Feed> => {
+    const { session, user } = await visibleUser(username);
+    const reels = await reelsMedia([user.id], false, session);
+    return { title: `${user.full_name} (@${user.username}) - Instagram Stories`, url: `${baseUrl}/stories/${user.username}/`, ...userHeader(user), items: (reels[0]?.items ?? []).map((item: any) => renderItem(item)) };
+};
+
+export const getHighlightsFeed = async (username: string): Promise<Feed> => {
+    const { session, user } = await visibleUser(username);
+    const tray = await graphql('PolarisProfileStoryHighlightsTrayContentQuery', { user_id: user.id, first: 12 }, session.tokens, session.jar);
+    const ids: string[] = tray.highlights.edges.slice(0, 20).map((edge: any) => edge.node.id);
+    const highlights = ids.length > 0 ? await reelsMedia(ids, true, session) : [];
+    return {
+        title: `${user.full_name} (@${user.username}) - Instagram Highlights`,
+        url: `${baseUrl}/${user.username}`,
+        ...userHeader(user),
+        items: highlights.flatMap((highlight: any) =>
+            highlight.items.map((item: any) => ({
+                ...renderItem(item),
+                title: highlight.title,
+                url: `${baseUrl}/stories/highlights/${String(highlight.id).split(':', 2)[1]}/`,
+            }))
+        ),
+    };
+};
+
+export const getTagsFeed = async (rawTag: string): Promise<Feed> => {
+    const cookie = requireCookie('hashtags');
+    const tag = rawTag.replace(/^#/, '');
+    const jar = await cookieJarOf(cookie);
+    const page = await loadPage(`${baseUrl}/explore/search/keyword/?q=${encodeURIComponent(`#${tag}`)}`, jar);
+    if (page.url.includes('/accounts/login/') || !(await checkLogin(jar))) {
+        throw refusedCookie(cookie);
+    }
+    const response = await request(`${baseUrl}/api/v1/tags/web_info/?${new URLSearchParams({ tag_name: tag })}`, { headers: await apiHeaders(jar) });
+    if (response.status === 404) {
+        throw notFound(`Instagram hashtag #${tag} not found.`);
+    }
+    if (!response.ok) {
+        throw new HttpError(502, `Instagram answered ${response.status}.`);
+    }
+    const { data }: any = await response.json();
+    const medias: any[] = (data?.top?.sections ?? []).flatMap((section: any) =>
+        // either media or clips
+        (section.feed_type === 'media' ? section.layout_content.medias : [...section.layout_content.one_by_two_item.clips.items, ...section.layout_content.fill_items]).map((item: any) => item.media)
+    );
+    return { title: `#${tag} - Instagram`, url: `${baseUrl}/explore/search/keyword/?q=%23${tag}`, icon: data?.profile_pic_url, items: medias.map((media) => renderItem(media)) };
+};
+
+export const getUserFeed = async (username: string): Promise<Feed> => {
+    const cookie = getEnv('INSTAGRAM_COOKIE');
+    const session = await openProfile(username, cookie);
+    const { jar, html, tokens } = session;
 
     let user: User | undefined;
     let nodes: any[];
     if (tokens.dtsg) {
-        const profile = await graphql(
-            'PolarisProfilePageContentQuery',
-            {
-                id: profileId,
-                enable_integrity_filters: true,
-                render_surface: 'PROFILE',
-                __relay_internal__pv__PolarisCannesGuardianExperienceEnabledrelayprovider: false,
-                __relay_internal__pv__PolarisCASB976ProfileEnabledrelayprovider: false,
-                __relay_internal__pv__PolarisWebSchoolsEnabledrelayprovider: false,
-                __relay_internal__pv__PolarisRepostsConsumptionEnabledrelayprovider: false,
-                __relay_internal__pv__PolarisShortDramaEnabledrelayprovider: false,
-            },
-            tokens,
-            jar
-        );
+        const profile = await profileQuery(session);
         user = profile.user;
         if (user!.is_private && !user!.friendship_status?.following) {
             throw needsCredential(`@${user!.username} is private, send INSTAGRAM_COOKIE of an account that follows it.`);

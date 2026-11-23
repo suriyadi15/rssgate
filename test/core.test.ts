@@ -25,6 +25,10 @@ describe('config header', () => {
     ])('rejects %s', (_name, header) => {
         expect(() => parseConfigHeader(header)).toThrow();
     });
+    test('accepts the YouTube OAuth and Twitter app credentials', () => {
+        const env = { YOUTUBE_CLIENT_ID: 'a', YOUTUBE_CLIENT_SECRET: 'b', YOUTUBE_REFRESH_TOKEN: 'c', TWITTER_CONSUMER_KEY: 'd', TWITTER_CONSUMER_SECRET: 'e' };
+        expect(parseConfigHeader(JSON.stringify(env))).toEqual(env);
+    });
     test('the request value wins over the process environment', () => {
         process.env.INSTAGRAM_COOKIE = 'from-env';
         expect(getEnv('INSTAGRAM_COOKIE')).toBe('from-env');
@@ -107,6 +111,53 @@ describe('app', () => {
         const response = await app.request('/twitter/user/jack', { headers: { authorization: 'Bearer secret' } });
         expect(response.status).toBe(503);
         expect(((await response.json()) as any).error.message).toContain('TWITTER_AUTH_TOKEN');
+    });
+});
+
+describe('routes', () => {
+    const app = createApp('secret');
+    const get = (path: string) => app.request(path, { headers: { authorization: 'Bearer secret' } });
+    const message = async (response: Response) => ((await response.json()) as any).error.message as string;
+
+    // Routes that need a credential answer 503 and name it, so a 404 means the route is missing
+    test.each([
+        ['/twitter/media/jack', 'TWITTER_AUTH_TOKEN'],
+        ['/twitter/likes/jack', 'TWITTER_AUTH_TOKEN'],
+        ['/twitter/home', 'TWITTER_AUTH_TOKEN'],
+        ['/twitter/home_latest', 'TWITTER_AUTH_TOKEN'],
+        ['/twitter/spaces/jack', 'TWITTER_AUTH_TOKEN'],
+        ['/twitter/tweet/jack/status/20', 'TWITTER_AUTH_TOKEN'],
+        ['/twitter/trends', 'TWITTER_CONSUMER_KEY'],
+        ['/twitter/trends/23424856', 'TWITTER_CONSUMER_KEY'],
+        ['/instagram/stories/nasa', 'INSTAGRAM_COOKIE'],
+        ['/instagram/highlights/nasa', 'INSTAGRAM_COOKIE'],
+        ['/instagram/tags/cats', 'INSTAGRAM_COOKIE'],
+        ['/youtube/subscriptions', 'YOUTUBE_CLIENT_ID'],
+    ])('%s without a credential is a 503 naming %s', async (path, name) => {
+        const response = await get(path);
+        expect(response.status).toBe(503);
+        expect(await message(response)).toContain(name);
+    });
+
+    test.each([
+        ['/youtube/charts/Nope', 400],
+        ['/youtube/charts/TopSongs/xyz', 400],
+        ['/threads/search/rss?serpType=bad', 400],
+        ['/tiktok/live/bad%20name', 400],
+        ['/facebook/group/bad%20id', 404],
+        ['/facebook/photos/bad%20id', 404],
+        ['/facebook/reels/bad%20id', 404],
+    ])('%s answers %d before any request to the platform', async (path, status) => {
+        expect((await get(path)).status).toBe(status);
+    });
+
+    test('a trends woeid must be a number', async () => {
+        process.env.TWITTER_CONSUMER_KEY = 'k';
+        process.env.TWITTER_CONSUMER_SECRET = 's';
+        const response = await get('/twitter/trends/abc');
+        delete process.env.TWITTER_CONSUMER_KEY;
+        delete process.env.TWITTER_CONSUMER_SECRET;
+        expect(response.status).toBe(400);
     });
 });
 

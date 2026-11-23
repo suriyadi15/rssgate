@@ -283,3 +283,126 @@ export const getPageFeed = async (id: string): Promise<Feed> => {
         items: storiesToItems(stories),
     };
 };
+
+const reelsProviderVariables = {
+    __relay_internal__pv__CometReels_enable_e2e_logging_gkrelayprovider: false,
+    __relay_internal__pv__FBReels_deprecate_short_form_video_context_gkrelayprovider: false,
+    __relay_internal__pv__FBReelsMediaFooter_comet_enable_reels_ads_gkrelayprovider: true,
+    __relay_internal__pv__FBUnifiedVideoMediaContentContainer_comet_video_document_picture_in_picture_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMediaContentContainer_enable_chapters_pill_gkrelayprovider: false,
+    __relay_internal__pv__ShouldEnableBakedInTextUnifiedVideorelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoCometVideoMedia_comet_photosensitive_content_warning_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMediaHeaderControls_enable_chapters_pill_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMediaFooter_comet_enable_reels_ads_gkrelayprovider: true,
+    __relay_internal__pv__FBUnifiedVideoMediaFooter_organic_ad_cta_on_comet_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMediaFooter_enable_meta_ai_pill_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMediaFooter_enable_ai_embodiment_chat_pill_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMediaFooter_enable_video_augment_pills_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoPlayerScrubber_fb_comet_vpv_heatmap_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoDescriptionWithEntities_comet_translations_revamp_sync_caption_with_audio_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoFeedbackBar_comet_reels_save_button_gkrelayprovider: false,
+    __relay_internal__pv__usePushPipEngagementCounts_comet_video_document_picture_in_picture_gkrelayprovider: false,
+    __relay_internal__pv__FBReels_enable_view_dubbed_audio_type_gkrelayprovider: false,
+    __relay_internal__pv__FBUnifiedVideoMenu_fb_reels_ranking_debug_tool_gkrelayprovider: false,
+    __relay_internal__pv__CometAudioLanguageUtils_comet_translations_revamp_preferred_languages_gkrelayprovider: false,
+};
+
+const checkId = (id: string, what: string) => {
+    if (!/^[\w.-]{1,100}$/.test(id)) {
+        throw notFound(`Invalid Facebook ${what} id.`);
+    }
+};
+
+/** The id and name of a tab (photos, reels) of a page or profile. */
+const fetchCollection = (id: string, tab: string, tabKey: string) =>
+    tryGet(`facebook:${tabKey}:${id}`, async () => {
+        const html = await getText(`${baseUrl}/${id}/${tab}`);
+        const collectionId = html.match(new RegExp(`"tab_key":"${tabKey}","id":"([^"]+)"`))?.[1];
+        if (!collectionId) {
+            throw notFound(`Facebook ${tab} of ${id} not found.`);
+        }
+        const name = html.match(/"nav_collections":\{"nodes":\[\{"id":"[^"]+","name":"((?:[^"\\]|\\.)*)"/)?.[1];
+        return { id: collectionId, name: name ? (JSON.parse(`"${name}"`) as string) : undefined };
+    });
+
+export const getGroupFeed = async (id: string): Promise<Feed> => {
+    checkId(id, 'group');
+    const groupId = /^\d+$/.test(id)
+        ? id
+        : await tryGet(`facebook:group:${id}`, async () => {
+              const html = await getText(`${baseUrl}/groups/${id}/about`, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' } });
+              const found = html.match(/"groupID":"(\d+)"/)?.[1];
+              if (!found) {
+                  throw notFound(`Facebook group ${id} not found.`);
+              }
+              return found;
+          });
+    const stories = await fetchStories(
+        'GroupsCometFeedRegularStoriesPaginationQuery',
+        '28691921240463205',
+        {
+            id: groupId,
+            feedLocation: 'GROUP',
+            feedType: 'DISCUSSION',
+            feedbackSource: 0,
+            privacySelectorRenderLocation: 'COMET_STREAM',
+            renderLocation: 'group',
+            sortingSetting: 'CHRONOLOGICAL',
+            stream_initial_count: 1,
+            youthIntegrityHostID: groupId,
+        },
+        21
+    );
+    if (stories.length === 0 && !getEnv('FACEBOOK_COOKIE')) {
+        throw needsCredential('Facebook returned no posts, it may want a login: send FACEBOOK_COOKIE.');
+    }
+    const group = stories[0]?.to;
+    return { title: group?.name ?? `Facebook Group ${id}`, url: group?.url ?? `${baseUrl}/groups/${id}`, items: storiesToItems(stories) };
+};
+
+export const getPhotosFeed = async (id: string): Promise<Feed> => {
+    checkId(id, 'page');
+    const collection = await fetchCollection(id, 'photos', 'photos_by');
+    const photos = await fetchGraphql(
+        'ProfileCometAppCollectionPhotosRendererPaginationQuery',
+        '27028962643386672',
+        { id: collection.id, count: 8, scale: 1, created_time_start: null, created_time_end: null, tagged_user_ids: null },
+        24,
+        (lines) => lines[0].data.node.pageItems.edges.map((edge: any) => edge.node)
+    );
+    return {
+        title: collection.name ?? `Facebook Photos ${id}`,
+        url: `${baseUrl}/${id}/photos`,
+        items: photos.map((item) => ({
+            title: item.node.accessibility_caption ?? `Photo ${item.node.id}`,
+            contentHtml: `<img src="${item.node.viewer_image.uri}" alt="${item.node.accessibility_caption ?? ''}">`,
+            url: item.url,
+        })),
+    };
+};
+
+export const getReelsFeed = async (id: string): Promise<Feed> => {
+    checkId(id, 'page');
+    const collection = await fetchCollection(id, 'reels', 'owner_reels');
+    const reels = await fetchGraphql(
+        'ProfileCometAppCollectionReelsRendererPaginationQuery',
+        '28864322409901433',
+        { ...reelsProviderVariables, id: collection.id, count: 10, renderLocation: null, scale: 1, useDefaultActor: false },
+        20,
+        (lines) => lines[0].data.node.aggregated_fb_shorts.edges.map((edge: any) => edge.profile_reel_node.node)
+    );
+    return {
+        title: collection.name ?? `Facebook Reels ${id}`,
+        url: `${baseUrl}/${id}/reels/`,
+        items: reels.map((story) => {
+            const context = story.short_form_video_context;
+            return {
+                title: story.message?.text?.split('\n', 1)[0] ?? `Reel ${story.post_id}`,
+                contentHtml: (story.message ? renderText(story.message) : '') + renderVideo(context.playback_video),
+                url: context.shareable_url,
+                published: parseDate(story.creation_time),
+                author: context.video_owner?.name,
+            };
+        }),
+    };
+};

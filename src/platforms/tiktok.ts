@@ -7,7 +7,7 @@ import { tryGet } from '../cache';
 import { badRequest, HttpError } from '../errors';
 import type { Feed } from '../feed';
 import { escapeHtml } from '../html';
-import { getText } from '../http';
+import { getJson, getText } from '../http';
 
 const baseUrl = 'https://www.tiktok.com';
 
@@ -71,5 +71,69 @@ export const getUserFeed = async (user: string): Promise<Feed> => {
             published: new Date(Number(BigInt(video.id) >> 32n) * 1000),
             image: video.coverUrl,
         })),
+    };
+};
+
+type LiveInfo = { user: any; liveRoom: any };
+
+const apiLiveRoom = async (handle: string): Promise<LiveInfo | null> => {
+    const { data } = await getJson(`${baseUrl}/api-live/user/room/?${new URLSearchParams({ aid: '1988', sourceType: '54', uniqueId: handle })}`);
+    return data?.user?.uniqueId ? data : null;
+};
+
+const htmlLiveRoom = async (link: string): Promise<LiveInfo> => {
+    let $ = load(await getText(link));
+    if ($('p#wci').hasClass('_wafchallengeid')) {
+        const cookie = solveWafChallenge($('p#cs').attr('class')!);
+        $ = load(await getText(link, { headers: { cookie: `_wafchallengeid=${cookie};` } }));
+    }
+    const state = $('script#SIGI_STATE').text();
+    if (!state) {
+        throw new HttpError(502, 'TikTok live page has an unexpected shape, TikTok may have blocked the request.');
+    }
+    return JSON.parse(state).LiveRoom.liveRoomUserInfo;
+};
+
+const isAlive = async (roomId: string): Promise<boolean | null> => {
+    const { data } = await getJson(`https://webcast.tiktok.com/webcast/room/check_alive/?${new URLSearchParams({ aid: '1988', room_ids: roomId })}`);
+    return data?.[0]?.alive ?? null;
+};
+
+/** Whether a user is live right now. */
+export const getLiveFeed = async (user: string): Promise<Feed> => {
+    const handle = user.startsWith('@') ? user.slice(1) : user;
+    if (!/^[\w.]{1,64}$/.test(handle)) {
+        throw badRequest('Invalid TikTok user, expected something like @shinichifuku.');
+    }
+    const link = `${baseUrl}/@${handle}/live`;
+    const { user: info, liveRoom } = await tryGet(
+        `tiktok:live:${handle}`,
+        async () => {
+            const room = (await apiLiveRoom(handle)) ?? (await htmlLiveRoom(link));
+            if (!room.user.roomId) {
+                return room;
+            }
+            const alive = await isAlive(room.user.roomId);
+            return alive === null ? room : { ...room, liveRoom: { ...room.liveRoom, status: alive ? 2 : 4 } };
+        },
+        300
+    );
+    const status = liveRoom.status;
+    const title = status === 2 ? liveRoom.title || `${info.nickname}'s going live now!` : status === 4 ? `${info.nickname} is not live currently.` : `${info.nickname}'s live status is unknown (status ${status}).`;
+    return {
+        title: `${info.nickname} (@${info.uniqueId})'s Live Stream - TikTok`,
+        url: link,
+        description: info.signature,
+        icon: info.avatarLarger || info.avatarMedium || info.avatarThumb,
+        // The fragment makes every change of the live status a new item
+        items: [
+            {
+                url: `${link}#${info.roomId || info.uniqueId}:${liveRoom.streamId || liveRoom.startTime || ''}:${status}`,
+                title,
+                contentHtml: '',
+                author: info.nickname,
+                published: liveRoom.startTime ? new Date(Number(liveRoom.startTime) * 1000) : undefined,
+            },
+        ],
     };
 };
